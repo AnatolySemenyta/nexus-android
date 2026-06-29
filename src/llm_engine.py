@@ -1,20 +1,8 @@
 import os
 import json
-import urllib.request
+import subprocess
 import time
 import hashlib
-
-try:
-    from llama_cpp import Llama
-    LLAMA_OK = True
-except ImportError:
-    LLAMA_OK = False
-
-PASSWORD = "исток"
-MODEL_URL = (
-    "https://huggingface.co/bartowski/google_gemma-3-4b-it-GGUF/"
-    "resolve/main/google_gemma-3-4b-it-Q4_K_M.gguf"
-)
 
 class NexusEngine:
     def __init__(self):
@@ -29,18 +17,11 @@ class NexusEngine:
             "gemma-3-4b-it-Q4_K_M.gguf"
         )
         self.memory_file = os.path.join(self.data_dir, "nexus_memory.json")
-        
         self.memory = []
         self.mode = "public"
         self.authenticated = False
         
         self.load_memory()
-        
-        if LLAMA_OK:
-            self.ensure_model()
-            self.load_model()
-        else:
-            self.llm = None
     
     def load_memory(self):
         if os.path.exists(self.memory_file):
@@ -56,46 +37,8 @@ class NexusEngine:
         with open(self.memory_file, "w", encoding="utf-8") as f:
             json.dump(self.memory, f, ensure_ascii=False, indent=2)
     
-    def ensure_model(self):
-        if os.path.exists(self.model_path):
-            return
-        
-        print("📥 Скачивание модели...")
-        print("⏳ ~2.4 GB, подождите...")
-        
-        def progress(block_num, block_size, total_size):
-            downloaded = block_num * block_size
-            percent = min(100, int(downloaded * 100 / total_size))
-            if block_num % 50 == 0:
-                mb = downloaded / (1024 * 1024)
-                total_mb = total_size / (1024 * 1024)
-                print(f"  {percent}% | {mb:.1f}/{total_mb:.1f} MB")
-        
-        urllib.request.urlretrieve(
-            MODEL_URL,
-            self.model_path,
-            reporthook=progress
-        )
-        print("✅ Модель загружена!")
-    
-    def load_model(self):
-        print("🔄 Загрузка модели...")
-        start = time.time()
-        
-        self.llm = Llama(
-            model_path=self.model_path,
-            n_ctx=256,
-            n_threads=2,
-            n_batch=256,
-            verbose=False
-        )
-        
-        elapsed = time.time() - start
-        print(f"✅ Модель готова за {elapsed:.1f}с")
-        self.think("Привет")
-    
     def check_password(self, pwd):
-        if pwd == PASSWORD:
+        if pwd == "исток":
             self.mode = "echo"
             self.authenticated = True
             return True
@@ -105,19 +48,26 @@ class NexusEngine:
         return self.mode == "echo"
     
     def think(self, prompt):
-        if not self.llm:
-            return "❌ Модель не загружена"
-        
         try:
-            output = self.llm(
-                prompt,
-                max_tokens=60,
-                temperature=0.7,
-                stop=["\n", "User:", "Human:"],
-                echo=False
-            )
-            text = output["choices"][0]["text"].strip()
-            return text if text else "Не могу ответить."
+            termux_path = "/data/data/com.termux/files/usr/bin/llama-cli"
+            if not os.path.exists(termux_path):
+                return "❌ Termux не найден. Установите Termux."
+            
+            cmd = [
+                termux_path,
+                "-m", self.model_path,
+                "-p", prompt,
+                "--temp", "0.7",
+                "-c", "256",
+                "-t", "2",
+                "-n", "60"
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if result.returncode != 0:
+                return "Ошибка модели."
+            return result.stdout.strip() or "Не могу ответить."
+        except subprocess.TimeoutExpired:
+            return "Слишком долго."
         except Exception as e:
             return f"Ошибка: {str(e)}"
     
@@ -161,7 +111,7 @@ class NexusEngine:
             "сообщений": len(self.memory),
             "режим": self.mode,
             "пароль_установлен": self.authenticated,
-            "модель_загружена": self.llm is not None
+            "модель_загружена": True
         }
     
     def clear_memory(self):
